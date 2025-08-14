@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>영역 선택 도구</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn-success { background-color: #28a745; color: white; }
+        .btn-danger { background-color: #dc3545; color: white; }
+        .btn-info { background-color: #17a2b8; color: white; }
+        .btn:hover { opacity: 0.8; }
+        .image-container {
+            position: relative;
+            display: inline-block;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        #canvas {
+            cursor: crosshair;
+            display: block;
+        }
+        .regions-list {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .region-item {
+            padding: 10px;
+            margin: 5px 0;
+            background-color: white;
+            border-radius: 3px;
+            border-left: 4px solid #007bff;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+        .status.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .instructions {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🖼️ 영역 선택 도구</h1>
+            <p>마우스로 드래그하여 영역을 선택하세요</p>
+        </div>
+        
+        <div class="instructions">
+            <h3>📋 사용법:</h3>
+            <ul>
+                <li><strong>영역 선택:</strong> 마우스로 드래그하여 사각형 그리기</li>
+                <li><strong>영역 크롭:</strong> "영역 크롭" 버튼 클릭</li>
+                <li><strong>영역 삭제:</strong> "모든 영역 삭제" 버튼 클릭</li>
+                <li><strong>결과 확인:</strong> output/cropped_regions/ 폴더 확인</li>
+            </ul>
+        </div>
+        
+        <div class="controls">
+            <button class="btn btn-success" onclick="cropRegions()">📷 영역 크롭</button>
+            <button class="btn btn-danger" onclick="clearRegions()">🗑️ 모든 영역 삭제</button>
+            <button class="btn btn-info" onclick="refreshImage()">🔄 새로고침</button>
+            <button class="btn btn-primary" onclick="downloadResults()">💾 결과 다운로드</button>
+        </div>
+        
+        <div class="image-container">
+            <canvas id="canvas"></canvas>
+        </div>
+        
+        <div class="regions-list">
+            <h3>📍 선택된 영역: <span id="regionCount">0</span>개</h3>
+            <div id="regionsList"></div>
+        </div>
+        
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        let canvas, ctx;
+        let isDrawing = false;
+        let startX, startY, currentX, currentY;
+        let regions = [];
+        let imageLoaded = false;
+
+        // 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            
+            loadImage();
+            setupEventListeners();
+        });
+
+        // 이미지 로드
+        async function loadImage() {
+            try {
+                const response = await fetch('/api/image');
+                const data = await response.json();
+                
+                if (data.image_data) {
+                    const img = new Image();
+                    img.onload = function() {
+                        canvas.width = data.width;
+                        canvas.height = data.height;
+                        ctx.drawImage(img, 0, 0);
+                        imageLoaded = true;
+                        showStatus('이미지 로드 완료', 'success');
+                    };
+                    img.src = 'data:image/png;base64,' + data.image_data;
+                }
+            } catch (error) {
+                showStatus('이미지 로드 실패: ' + error.message, 'error');
+            }
+        }
+
+        // 이벤트 리스너 설정
+        function setupEventListeners() {
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+        }
+
+        // 그리기 시작
+        function startDrawing(e) {
+            if (!imageLoaded) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            isDrawing = true;
+        }
+
+        // 그리기 중
+        function draw(e) {
+            if (!isDrawing || !imageLoaded) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            currentX = e.clientX - rect.left;
+            currentY = e.clientY - rect.top;
+            
+            redrawCanvas();
+            
+            // 현재 그리는 영역 표시
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+            ctx.setLineDash([]);
+        }
+
+        // 그리기 종료
+        async function stopDrawing(e) {
+            if (!isDrawing || !imageLoaded) return;
+            
+            isDrawing = false;
+            
+            const width = Math.abs(currentX - startX);
+            const height = Math.abs(currentY - startY);
+            
+            // 최소 크기 확인
+            if (width > 10 && height > 10) {
+                const x1 = Math.min(startX, currentX);
+                const y1 = Math.min(startY, currentY);
+                const x2 = Math.max(startX, currentX);
+                const y2 = Math.max(startY, currentY);
+                
+                try {
+                    const response = await fetch('/api/regions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ x1, y1, x2, y2 })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.region) {
+                        regions.push(data.region);
+                        updateRegionsList();
+                        redrawCanvas();
+                        showStatus(`${data.region.name} 추가됨`, 'success');
+                    }
+                } catch (error) {
+                    showStatus('영역 추가 실패: ' + error.message, 'error');
+                }
+            }
+        }
+
+        // 캔버스 다시 그리기
+        async function redrawCanvas() {
+            try {
+                const response = await fetch('/api/image');
+                const data = await response.json();
+                
+                if (data.image_data) {
+                    const img = new Image();
+                    img.onload = function() {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, 0, 0);
+                        
+                        // 기존 영역들 그리기
+                        regions.forEach((region, index) => {
+                            const x1 = region.original_coords[0] / (canvas.width * 1.0);
+                            const y1 = region.original_coords[1] / (canvas.height * 1.0);
+                            const x2 = region.original_coords[2] / (canvas.width * 1.0);
+                            const y2 = region.original_coords[3] / (canvas.height * 1.0);
+                            
+                            // 스케일링 적용
+                            const rectX = x1 * canvas.width;
+                            const rectY = y1 * canvas.height;
+                            const rectW = (x2 - x1) * canvas.width;
+                            const rectH = (y2 - y1) * canvas.height;
+                            
+                            ctx.strokeStyle = '#00ff00';
+                            ctx.lineWidth = 2;
+                            ctx.strokeRect(rectX, rectY, rectW, rectH);
+                            
+                            // 영역 번호
+                            ctx.fillStyle = '#00ff00';
+                            ctx.font = '14px Arial';
+                            ctx.fillText(region.name, rectX + 5, rectY - 5);
+                        });
+                    };
+                    img.src = 'data:image/png;base64,' + data.image_data;
+                }
+            } catch (error) {
+                console.error('캔버스 다시 그리기 오류:', error);
+            }
+        }
+
+        // 영역 리스트 업데이트
+        function updateRegionsList() {
+            const regionsList = document.getElementById('regionsList');
+            const regionCount = document.getElementById('regionCount');
+            
+            regionCount.textContent = regions.length;
+            
+            regionsList.innerHTML = regions.map(region => `
+                <div class="region-item">
+                    <strong>${region.name}</strong> - 
+                    크기: ${region.width}×${region.height}px
+                </div>
+            `).join('');
+        }
+
+        // 영역 크롭
+        async function cropRegions() {
+            if (regions.length === 0) {
+                showStatus('선택된 영역이 없습니다.', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/crop', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus('크롭 완료: ' + data.message, 'success');
+                } else {
+                    showStatus('크롭 실패: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showStatus('크롭 오류: ' + error.message, 'error');
+            }
+        }
+
+        // 모든 영역 삭제
+        async function clearRegions() {
+            try {
+                await fetch('/api/clear', { method: 'POST' });
+                regions = [];
+                updateRegionsList();
+                redrawCanvas();
+                showStatus('모든 영역이 삭제되었습니다.', 'success');
+            } catch (error) {
+                showStatus('삭제 실패: ' + error.message, 'error');
+            }
+        }
+
+        // 새로고침
+        function refreshImage() {
+            loadImage();
+            showStatus('이미지를 새로고침했습니다.', 'success');
+        }
+
+        // 결과 다운로드 (폴더 열기 안내)
+        function downloadResults() {
+            showStatus('결과 파일이 output/cropped_regions/ 폴더에 저장됩니다.', 'success');
+        }
+
+        // 상태 메시지 표시
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
